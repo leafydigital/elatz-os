@@ -7,9 +7,10 @@ import ContactsPage from './pages/ContactsPage'
 import TransactionsPage from './pages/TransactionsPage'
 import DebtsPage from './pages/DebtsPage'
 import SubscriptionsPage from './pages/SubscriptionsPage'
+import ManageBusinessPage from './pages/ManageBusinessPage'
 import {
   LayoutDashboard, CheckSquare, Wallet, CreditCard, Zap,
-  LogOut, RefreshCw, FileText, Users, Bot
+  LogOut, RefreshCw, FileText, Users, Building2
 } from 'lucide-react'
 
 const NAV_ITEMS = [
@@ -20,10 +21,11 @@ const NAV_ITEMS = [
   { id: 'money',     label: 'Money',      icon: Wallet },
   { id: 'debts',     label: 'Debts',      icon: CreditCard },
   { id: 'subs',      label: 'Subs',       icon: Zap },
+  { id: 'businesses',label: 'Businesses', icon: Building2 },
 ]
 
 // Mobile shows only the 5 most-used tabs
-const MOBILE_NAV = ['dashboard', 'tasks', 'notes', 'contacts', 'money']
+const MOBILE_NAV = ['dashboard', 'tasks', 'notes', 'contacts', 'businesses']
 
 function AppShell() {
   const { isLoggedIn, authLoading, activeTab, setActiveTab, logout, loading, loadAll, user } = useApp()
@@ -32,13 +34,14 @@ function AppShell() {
   if (!isLoggedIn) return <LoginPage />
 
   const pages = {
-    dashboard: <Dashboard />,
-    tasks:     <TasksPage />,
-    notes:     <NotesPage />,
-    contacts:  <ContactsPage />,
-    money:     <TransactionsPage />,
-    debts:     <DebtsPage />,
-    subs:      <SubscriptionsPage />,
+    dashboard:  <Dashboard />,
+    tasks:      <TasksPage />,
+    notes:      <NotesPage />,
+    contacts:   <ContactsPage />,
+    money:      <TransactionsPage />,
+    debts:      <DebtsPage />,
+    subs:       <SubscriptionsPage />,
+    businesses: <ManageBusinessPage />,
   }
 
   return (
@@ -62,7 +65,16 @@ function AppShell() {
             )
           })}
           <div className="sidebar-section-label">Finance</div>
-          {NAV_ITEMS.slice(4).map(item => {
+          {NAV_ITEMS.slice(4, 7).map(item => {
+            const Icon = item.icon
+            return (
+              <button key={item.id} className={`sidebar-nav-item ${activeTab === item.id ? 'active' : ''}`} onClick={() => setActiveTab(item.id)}>
+                <Icon size={16} /><span>{item.label}</span>
+              </button>
+            )
+          })}
+          <div className="sidebar-section-label">Settings</div>
+          {NAV_ITEMS.slice(7).map(item => {
             const Icon = item.icon
             return (
               <button key={item.id} className={`sidebar-nav-item ${activeTab === item.id ? 'active' : ''}`} onClick={() => setActiveTab(item.id)}>
