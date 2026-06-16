@@ -1,10 +1,16 @@
 import { useMemo, useState } from 'react'
-import { useApp } from '../context/AppContext'
-import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO } from 'date-fns'
-import { TrendingUp, TrendingDown, AlertCircle, CreditCard, Calendar, Zap } from 'lucide-react'
+import { useApp, BIZ_CONFIG } from '../context/AppContext'
+import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, isToday, isPast } from 'date-fns'
+import { TrendingUp, TrendingDown, AlertCircle, Zap, Bot, CheckCircle2, Clock, Circle } from 'lucide-react'
+
+const STATUS_ICON = {
+  pending: <Circle size={14} />,
+  in_progress: <Clock size={14} />,
+  done: <CheckCircle2 size={14} />,
+}
 
 export default function Dashboard() {
-  const { debts, transactions, subscriptions, businesses } = useApp()
+  const { tasks, transactions, debts, subscriptions, agentTasks, notes, businesses, setActiveTab } = useApp()
   const [aiAnalysis, setAiAnalysis] = useState(null)
   const [analyzing, setAnalyzing] = useState(false)
 
@@ -14,9 +20,8 @@ export default function Dashboard() {
 
   const monthlyTx = useMemo(() =>
     transactions.filter(t => {
-      try {
-        return isWithinInterval(parseISO(t.transaction_date), { start: monthStart, end: monthEnd })
-      } catch { return false }
+      try { return isWithinInterval(parseISO(t.transaction_date), { start: monthStart, end: monthEnd }) }
+      catch { return false }
     }), [transactions])
 
   const totalIncome = monthlyTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
@@ -24,196 +29,218 @@ export default function Dashboard() {
   const netAmount = totalIncome - totalExpense
   const totalDebt = debts.reduce((s, d) => s + Number(d.remaining_amount), 0)
   const monthlyEMI = debts.reduce((s, d) => s + Number(d.emi_monthly || 0), 0)
-  const monthlySubscriptions = subscriptions
-    .filter(s => s.billing_cycle === 'monthly')
-    .reduce((sum, s) => sum + Number(s.amount), 0)
+  const monthlySubscriptions = subscriptions.filter(s => s.billing_cycle === 'monthly').reduce((sum, s) => sum + Number(s.amount), 0)
 
-  // Simple unnecessary spend detection without AI
-  const unnecessarySpends = monthlyTx.filter(t => {
-    if (t.type !== 'expense') return false
-    const unnecessaryCategories = ['Energy Drinks', 'Junk Snacks', 'Online Shopping', 'Entertainment', 'Miscellaneous']
-    if (unnecessaryCategories.includes(t.category)) return true
-    const desc = (t.description || '').toLowerCase()
-    const keywords = ['energy drink', 'junk', 'snack', 'amazon', 'flipkart', 'zomato', 'swiggy', 'clothes', 'fashion', 'random', 'impulse']
-    return keywords.some(k => desc.includes(k))
-  })
-  const unnecessaryTotal = unnecessarySpends.reduce((s, t) => s + Number(t.amount), 0)
+  // Today's tasks
+  const todayTasks = tasks.filter(t => t.recur_daily || (t.due_date && isToday(parseISO(t.due_date))))
+  const pendingToday = todayTasks.filter(t => t.status !== 'done')
+  const doneToday = todayTasks.filter(t => t.status === 'done')
+
+  // Overdue
+  const overdue = tasks.filter(t => t.due_date && isPast(parseISO(t.due_date)) && !isToday(parseISO(t.due_date)) && t.status !== 'done')
+
+  // Agent tasks summary
+  const agentPending = agentTasks.filter(a => a.status === 'pending').length
+  const agentDone = agentTasks.filter(a => a.status === 'done').length
+  const recentAgent = agentTasks.filter(a => a.status === 'done').slice(0, 3)
+
+  // Per-biz task counts
+  const bizTaskStats = businesses.map(b => ({
+    ...b,
+    total: tasks.filter(t => t.business_id === b.id).length,
+    done: tasks.filter(t => t.business_id === b.id && t.status === 'done').length,
+    pending: tasks.filter(t => t.business_id === b.id && t.status !== 'done').length,
+  }))
+
+  // Unnecessary spend detection
+  const unnecessaryCategories = ['Energy Drinks', 'Junk Snacks', 'Online Shopping', 'Entertainment']
+  const unnecessaryTotal = monthlyTx.filter(t => t.type === 'expense' && unnecessaryCategories.includes(t.category)).reduce((s, t) => s + Number(t.amount), 0)
+
+  const hour = now.getHours()
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
   async function runAIAnalysis() {
     setAnalyzing(true)
     try {
-      const expenseData = monthlyTx
-        .filter(t => t.type === 'expense')
-        .map(t => `${t.description || 'No desc'} - ₹${t.amount} (${t.category || 'Uncategorized'})`)
-        .join('\n')
-
+      const expenseData = monthlyTx.filter(t => t.type === 'expense').map(t => `${t.description || 'No desc'} - ₹${t.amount} (${t.category || 'Uncategorized'})`).join('\n')
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-sonnet-4-6',
           max_tokens: 1000,
-          messages: [{
-            role: 'user',
-            content: `Analyze these monthly expenses for an Indian entrepreneur and identify unnecessary spending. Be specific and actionable. Return JSON only:
-{
-  "unnecessary_items": [{"description": "...", "amount": 0, "reason": "..."}],
-  "total_unnecessary": 0,
-  "savings_tip": "one actionable tip",
-  "pattern": "one spending pattern observation"
-}
-
-Expenses:
-${expenseData || 'No expenses this month yet'}`
-          }]
+          messages: [{ role: 'user', content: `Analyze these monthly expenses for an Indian entrepreneur and identify unnecessary spending. Be specific and actionable. Return JSON only:\n{\n  "unnecessary_items": [{"description": "...", "amount": 0, "reason": "..."}],\n  "total_unnecessary": 0,\n  "savings_tip": "one actionable tip",\n  "pattern": "one spending pattern observation"\n}\n\nExpenses:\n${expenseData || 'No expenses this month yet'}` }]
         })
       })
       const data = await response.json()
       const text = data.content?.[0]?.text || '{}'
-      const clean = text.replace(/```json|```/g, '').trim()
-      setAiAnalysis(JSON.parse(clean))
-    } catch (e) {
-      console.error(e)
-    }
+      setAiAnalysis(JSON.parse(text.replace(/```json|```/g, '').trim()))
+    } catch (e) { console.error(e) }
     setAnalyzing(false)
   }
 
   return (
     <div className="page-content">
-      <div className="page-header">
-        <h1 className="page-title">Dashboard</h1>
-        <span className="page-subtitle">{format(now, 'MMMM yyyy')}</span>
+      {/* Morning Briefing Header */}
+      <div className="briefing-header">
+        <div className="briefing-greeting">{greeting}, Ram 👋</div>
+        <div className="briefing-title">{format(now, 'EEEE, d MMMM')}</div>
+        <div className="briefing-subtitle">
+          {pendingToday.length === 0
+            ? '✅ All daily tasks done — great start!'
+            : `${pendingToday.length} task${pendingToday.length > 1 ? 's' : ''} pending today · ${doneToday.length} done`}
+          {overdue.length > 0 && <span style={{ color: 'var(--red)', marginLeft: '0.75rem' }}>⚠ {overdue.length} overdue</span>}
+        </div>
       </div>
 
-      {/* Debt Overview */}
+      {/* Business KPI Cards */}
       <section className="section">
-        <h2 className="section-title"><CreditCard size={16} /> Active Debts & EMIs</h2>
-        {debts.length === 0 ? (
-          <div className="empty-card">No debts recorded. Add from Debts tab.</div>
+        <div className="section-title">Business Status</div>
+        <div className="briefing-kpis">
+          {bizTaskStats.map(b => (
+            <div key={b.id} className="kpi-card" onClick={() => setActiveTab('tasks')}>
+              <div className="kpi-biz" style={{ color: b.color }}>{b.emoji} {b.name}</div>
+              <div className="kpi-value">{b.pending}</div>
+              <div className="kpi-label">tasks pending · {b.done} done</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Agent Tasks Summary */}
+      {agentTasks.length > 0 && (
+        <section className="section">
+          <div className="section-title"><Bot size={14} /> Agent Tasks</div>
+          {recentAgent.map(a => (
+            <div key={a.id} className="agent-task-card">
+              <div className="agent-header">
+                <span className="agent-icon">🤖</span>
+                <span className="agent-title">{a.title}</span>
+                <span className={`agent-status ${a.status}`}>{a.status}</span>
+              </div>
+              {a.result && <div className="agent-result">✓ {a.result}</div>}
+            </div>
+          ))}
+          {agentPending > 0 && (
+            <div style={{ fontSize: '0.8rem', color: 'var(--text3)' }}>+ {agentPending} agent task{agentPending > 1 ? 's' : ''} queued</div>
+          )}
+        </section>
+      )}
+
+      {/* Today's Tasks */}
+      <section className="section">
+        <div className="section-title" style={{ justifyContent: 'space-between' }}>
+          <span>Today's Tasks</span>
+          <button className="btn-ghost" style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }} onClick={() => setActiveTab('tasks')}>View all →</button>
+        </div>
+        {todayTasks.length === 0 ? (
+          <div className="empty-card">No daily tasks set. Go to Tasks to add recurring tasks.</div>
         ) : (
-          <div className="debt-grid">
-            {debts.map(debt => (
-              <div key={debt.id} className="debt-card">
-                <div className="debt-name">{debt.name}</div>
-                <div className="debt-remaining">₹{Number(debt.remaining_amount).toLocaleString('en-IN')}</div>
-                <div className="debt-meta">
-                  {debt.emi_monthly ? <span className="debt-emi">EMI ₹{Number(debt.emi_monthly).toLocaleString('en-IN')}/mo</span> : null}
-                  {debt.interest_rate ? <span className="debt-rate">{debt.interest_rate}% p.a.</span> : null}
-                </div>
-                <div className="debt-progress-bar">
-                  <div
-                    className="debt-progress-fill"
-                    style={{ width: `${Math.min(100, ((Number(debt.total_amount) - Number(debt.remaining_amount)) / Number(debt.total_amount)) * 100)}%` }}
-                  />
-                </div>
-                <div className="debt-percent">
-                  {Math.round(((Number(debt.total_amount) - Number(debt.remaining_amount)) / Number(debt.total_amount)) * 100)}% paid
-                </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+            {todayTasks.slice(0, 8).map(t => (
+              <div key={t.id} className={`task-item status-${t.status}`} style={{ cursor: 'default' }}>
+                <span style={{ color: t.status === 'done' ? 'var(--green)' : 'var(--text3)' }}>
+                  {STATUS_ICON[t.status] || <Circle size={14} />}
+                </span>
+                <span className="task-title" style={{ flex: 1, fontSize: '0.85rem' }}>{t.title}</span>
+                <span style={{ fontSize: '0.65rem', color: 'var(--text3)' }}>
+                  {businesses.find(b => b.id === t.business_id)?.emoji}
+                </span>
               </div>
             ))}
-          </div>
-        )}
-        {debts.length > 0 && (
-          <div className="debt-summary-row">
-            <span>Total Debt: <strong>₹{totalDebt.toLocaleString('en-IN')}</strong></span>
-            <span>Monthly EMI: <strong>₹{monthlyEMI.toLocaleString('en-IN')}</strong></span>
           </div>
         )}
       </section>
 
       {/* Monthly Financial Summary */}
       <section className="section">
-        <h2 className="section-title"><Calendar size={16} /> This Month</h2>
+        <div className="section-title"><TrendingUp size={14} /> {format(now, 'MMMM')} Finances</div>
         <div className="summary-grid">
           <div className="summary-card income-card">
             <TrendingUp size={20} />
-            <div className="summary-label">Income</div>
-            <div className="summary-amount">₹{totalIncome.toLocaleString('en-IN')}</div>
+            <div>
+              <div className="summary-label">Income</div>
+              <div className="summary-amount">₹{totalIncome.toLocaleString('en-IN')}</div>
+            </div>
           </div>
           <div className="summary-card expense-card">
             <TrendingDown size={20} />
-            <div className="summary-label">Expenses</div>
-            <div className="summary-amount">₹{totalExpense.toLocaleString('en-IN')}</div>
+            <div>
+              <div className="summary-label">Expenses</div>
+              <div className="summary-amount">₹{totalExpense.toLocaleString('en-IN')}</div>
+            </div>
           </div>
           <div className={`summary-card ${netAmount >= 0 ? 'profit-card' : 'loss-card'}`}>
             <AlertCircle size={20} />
-            <div className="summary-label">{netAmount >= 0 ? 'In-Hand' : 'Deficit'}</div>
-            <div className="summary-amount">₹{Math.abs(netAmount).toLocaleString('en-IN')}</div>
+            <div>
+              <div className="summary-label">{netAmount >= 0 ? 'In-Hand' : 'Deficit'}</div>
+              <div className="summary-amount">₹{Math.abs(netAmount).toLocaleString('en-IN')}</div>
+            </div>
           </div>
           <div className="summary-card subs-card">
             <Zap size={20} />
-            <div className="summary-label">Subscriptions</div>
-            <div className="summary-amount">₹{monthlySubscriptions.toLocaleString('en-IN')}</div>
+            <div>
+              <div className="summary-label">Subscriptions</div>
+              <div className="summary-amount">₹{monthlySubscriptions.toLocaleString('en-IN')}</div>
+            </div>
           </div>
         </div>
+        {totalDebt > 0 && (
+          <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '0.75rem 1rem', fontSize: '0.82rem', color: 'var(--text2)', display: 'flex', justifyContent: 'space-between' }}>
+            <span>Total Debt: <strong style={{ color: 'var(--red)' }}>₹{totalDebt.toLocaleString('en-IN')}</strong></span>
+            <span>EMI/mo: <strong style={{ color: 'var(--amber)' }}>₹{monthlyEMI.toLocaleString('en-IN')}</strong></span>
+          </div>
+        )}
       </section>
 
-      {/* Unnecessary Spend */}
+      {/* AI Spend Analysis */}
       <section className="section">
-        <h2 className="section-title">
-          <AlertCircle size={16} /> Unnecessary Spending
+        <div className="section-title">
+          <AlertCircle size={14} /> Spending Watch
           <button className="ai-analyze-btn" onClick={runAIAnalysis} disabled={analyzing}>
             {analyzing ? '⏳ Analyzing...' : '🤖 AI Analyze'}
           </button>
-        </h2>
-
-        {unnecessarySpends.length > 0 && (
-          <div className="unnecessary-list">
-            {unnecessarySpends.slice(0, 5).map(t => (
-              <div key={t.id} className="unnecessary-item">
-                <span className="unneeded-desc">{t.description || t.category}</span>
-                <span className="unneeded-amount">₹{Number(t.amount).toLocaleString('en-IN')}</span>
-              </div>
-            ))}
-            <div className="unnecessary-total">
-              Detected unnecessary: <strong>₹{unnecessaryTotal.toLocaleString('en-IN')}</strong>
-              {' '}({totalExpense > 0 ? Math.round((unnecessaryTotal / totalExpense) * 100) : 0}% of expenses)
-            </div>
+        </div>
+        {unnecessaryTotal > 0 && (
+          <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 'var(--radius-sm)', padding: '0.75rem 1rem', fontSize: '0.85rem' }}>
+            Detected unnecessary spend: <strong style={{ color: 'var(--red)' }}>₹{unnecessaryTotal.toLocaleString('en-IN')}</strong>
+            {totalExpense > 0 && <span style={{ color: 'var(--text3)' }}> ({Math.round((unnecessaryTotal / totalExpense) * 100)}% of expenses)</span>}
           </div>
         )}
-
         {aiAnalysis && (
           <div className="ai-analysis-card">
             <div className="ai-badge">🤖 AI Analysis</div>
             {aiAnalysis.pattern && <p className="ai-pattern">📊 {aiAnalysis.pattern}</p>}
             {aiAnalysis.savings_tip && <p className="ai-tip">💡 {aiAnalysis.savings_tip}</p>}
-            {aiAnalysis.unnecessary_items?.length > 0 && (
-              <div className="ai-items">
-                {aiAnalysis.unnecessary_items.map((item, i) => (
-                  <div key={i} className="ai-item">
-                    <span>{item.description}</span>
-                    <span className="ai-item-reason">{item.reason}</span>
-                    <span className="ai-item-amount">₹{item.amount}</span>
-                  </div>
-                ))}
-              </div>
-            )}
             {aiAnalysis.total_unnecessary > 0 && (
               <div className="ai-total">AI flagged: ₹{Number(aiAnalysis.total_unnecessary).toLocaleString('en-IN')}</div>
             )}
           </div>
         )}
-
-        {unnecessarySpends.length === 0 && !aiAnalysis && (
-          <div className="empty-card">No obvious unnecessary spends detected this month. Run AI analysis for deeper insights.</div>
+        {unnecessaryTotal === 0 && !aiAnalysis && (
+          <div className="empty-card">No obvious unnecessary spends this month. Run AI analysis for deeper insights.</div>
         )}
       </section>
 
-      {/* Subscriptions */}
-      <section className="section">
-        <h2 className="section-title">📱 Active Subscriptions</h2>
-        <div className="subs-list">
-          {subscriptions.map(sub => (
-            <div key={sub.id} className="sub-item">
-              <span className="sub-emoji">{sub.emoji}</span>
-              <span className="sub-name">{sub.name}</span>
-              <span className="sub-cycle">{sub.billing_cycle}</span>
-              <span className="sub-amount">₹{Number(sub.amount).toLocaleString('en-IN')}</span>
-            </div>
-          ))}
-        </div>
-        <div className="subs-total">Monthly subscriptions: <strong>₹{monthlySubscriptions.toLocaleString('en-IN')}</strong></div>
-      </section>
+      {/* Business Notes Peek */}
+      {notes.length > 0 && (
+        <section className="section">
+          <div className="section-title" style={{ justifyContent: 'space-between' }}>
+            <span>📝 Business Status Notes</span>
+            <button className="btn-ghost" style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }} onClick={() => setActiveTab('notes')}>Edit →</button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {notes.slice(0, 3).map(n => (
+              <div key={n.id} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '0.75rem 1rem' }}>
+                <div style={{ fontSize: '0.72rem', fontWeight: 600, color: n.biz_color || 'var(--accent2)', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+                  {n.biz_emoji} {n.biz_name}
+                </div>
+                <div style={{ fontSize: '0.83rem', color: 'var(--text2)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{n.content.slice(0, 120)}{n.content.length > 120 ? '...' : ''}</div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   )
 }
