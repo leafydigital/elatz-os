@@ -1,18 +1,16 @@
 import { useMemo, useState } from 'react'
-import { useApp, BIZ_CONFIG } from '../context/AppContext'
+import { useApp } from '../context/AppContext'
 import { format, startOfMonth, endOfMonth, isWithinInterval, parseISO, isToday, isPast } from 'date-fns'
-import { TrendingUp, TrendingDown, AlertCircle, Zap, Bot, CheckCircle2, Clock, Circle } from 'lucide-react'
+import { TrendingUp, TrendingDown, AlertCircle, CreditCard, Zap, ShoppingCart, Package, RefreshCw } from 'lucide-react'
 
-const STATUS_ICON = {
-  pending: <Circle size={14} />,
-  in_progress: <Clock size={14} />,
-  done: <CheckCircle2 size={14} />,
-}
+const PRIORITY_ORDER = { urgent: 0, high: 1, medium: 2, low: 3 }
+const PRIORITY_COLOR = { urgent: '#ef4444', high: '#f59e0b', medium: '#3b82f6', low: '#6b7280' }
+
+function fmt(n) { return Number(n || 0).toLocaleString('en-IN') }
 
 export default function Dashboard() {
-  const { tasks, transactions, debts, subscriptions, agentTasks, notes, businesses, setActiveTab } = useApp()
-  const [aiAnalysis, setAiAnalysis] = useState(null)
-  const [analyzing, setAnalyzing] = useState(false)
+  const { businesses, tasks, transactions, debts, subscriptions, marketPrices, loadMarketPrices } = useApp()
+  const [refreshing, setRefreshing] = useState(false)
 
   const now = new Date()
   const monthStart = startOfMonth(now)
@@ -24,223 +22,227 @@ export default function Dashboard() {
       catch { return false }
     }), [transactions])
 
-  const totalIncome = monthlyTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
-  const totalExpense = monthlyTx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
-  const netAmount = totalIncome - totalExpense
+  // ── Row 1: Per-business income/expense ──────────────────────
+  const bizFinance = useMemo(() => businesses.map(b => {
+    const btx = monthlyTx.filter(t => t.business_id === b.id)
+    const income = btx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
+    const expense = btx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
+    return { ...b, income, expense, net: income - expense }
+  }), [businesses, monthlyTx])
+
+  const totalIncome = bizFinance.reduce((s, b) => s + b.income, 0)
+  const totalExpense = bizFinance.reduce((s, b) => s + b.expense, 0)
+
+  // ── Row 2: Debts, fixed expenses, unnecessary ────────────────
   const totalDebt = debts.reduce((s, d) => s + Number(d.remaining_amount), 0)
   const monthlyEMI = debts.reduce((s, d) => s + Number(d.emi_monthly || 0), 0)
-  const monthlySubscriptions = subscriptions.filter(s => s.billing_cycle === 'monthly').reduce((sum, s) => sum + Number(s.amount), 0)
+  const monthlySubs = subscriptions.filter(s => s.billing_cycle === 'monthly').reduce((s, sub) => s + Number(sub.amount), 0)
+  const unnecessaryCats = ['Energy Drinks', 'Junk Snacks', 'Online Shopping', 'Entertainment']
+  const unnecessaryTotal = monthlyTx.filter(t => t.type === 'expense' && unnecessaryCats.includes(t.category)).reduce((s, t) => s + Number(t.amount), 0)
 
-  // Today's tasks
-  const todayTasks = tasks.filter(t => t.recur_daily || (t.due_date && isToday(parseISO(t.due_date))))
-  const pendingToday = todayTasks.filter(t => t.status !== 'done')
-  const doneToday = todayTasks.filter(t => t.status === 'done')
+  // ── Row 3: Market prices ─────────────────────────────────────
+  const latestPrices = useMemo(() => {
+    const seen = {}
+    return marketPrices.filter(p => { if (seen[p.product]) return false; seen[p.product] = true; return true })
+  }, [marketPrices])
 
-  // Overdue
-  const overdue = tasks.filter(t => t.due_date && isPast(parseISO(t.due_date)) && !isToday(parseISO(t.due_date)) && t.status !== 'done')
+  // ── Row 4: Wear It stats ─────────────────────────────────────
+  const wearIt = businesses.find(b => b.name.toLowerCase().includes('wear it'))
+  const wearItTx = wearIt ? monthlyTx.filter(t => t.business_id === wearIt.id) : []
+  const wearItIncome = wearItTx.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount), 0)
+  const wearItExpense = wearItTx.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount), 0)
+  const wearItOrders = wearItTx.filter(t => t.type === 'income' && t.category === 'Sales Revenue').length
 
-  // Agent tasks summary
-  const agentPending = agentTasks.filter(a => a.status === 'pending').length
-  const agentDone = agentTasks.filter(a => a.status === 'done').length
-  const recentAgent = agentTasks.filter(a => a.status === 'done').slice(0, 3)
-
-  // Per-biz task counts
-  const bizTaskStats = businesses.map(b => ({
+  // ── Row 5: Priority tasks per business ───────────────────────
+  const bizTasks = useMemo(() => businesses.map(b => ({
     ...b,
-    total: tasks.filter(t => t.business_id === b.id).length,
-    done: tasks.filter(t => t.business_id === b.id && t.status === 'done').length,
-    pending: tasks.filter(t => t.business_id === b.id && t.status !== 'done').length,
-  }))
-
-  // Unnecessary spend detection
-  const unnecessaryCategories = ['Energy Drinks', 'Junk Snacks', 'Online Shopping', 'Entertainment']
-  const unnecessaryTotal = monthlyTx.filter(t => t.type === 'expense' && unnecessaryCategories.includes(t.category)).reduce((s, t) => s + Number(t.amount), 0)
+    urgentHigh: tasks
+      .filter(t => t.business_id === b.id && ['urgent', 'high'].includes(t.priority) && t.status !== 'done')
+      .sort((a, b) => (PRIORITY_ORDER[a.priority] || 9) - (PRIORITY_ORDER[b.priority] || 9))
+      .slice(0, 4)
+  })), [businesses, tasks])
 
   const hour = now.getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
 
-  async function runAIAnalysis() {
-    setAnalyzing(true)
-    try {
-      const expenseData = monthlyTx.filter(t => t.type === 'expense').map(t => `${t.description || 'No desc'} - ₹${t.amount} (${t.category || 'Uncategorized'})`).join('\n')
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 1000,
-          messages: [{ role: 'user', content: `Analyze these monthly expenses for an Indian entrepreneur and identify unnecessary spending. Be specific and actionable. Return JSON only:\n{\n  "unnecessary_items": [{"description": "...", "amount": 0, "reason": "..."}],\n  "total_unnecessary": 0,\n  "savings_tip": "one actionable tip",\n  "pattern": "one spending pattern observation"\n}\n\nExpenses:\n${expenseData || 'No expenses this month yet'}` }]
-        })
-      })
-      const data = await response.json()
-      const text = data.content?.[0]?.text || '{}'
-      setAiAnalysis(JSON.parse(text.replace(/```json|```/g, '').trim()))
-    } catch (e) { console.error(e) }
-    setAnalyzing(false)
+  async function refreshPrices() {
+    setRefreshing(true)
+    await loadMarketPrices()
+    setRefreshing(false)
   }
 
   return (
-    <div className="page-content">
-      {/* Morning Briefing Header */}
+    <div className="page-content" style={{ maxWidth: 1200 }}>
+
+      {/* Greeting */}
       <div className="briefing-header">
-        <div className="briefing-greeting">{greeting}, Ram 👋</div>
-        <div className="briefing-title">{format(now, 'EEEE, d MMMM')}</div>
+        <div className="briefing-greeting">{greeting}, Ram 👋 — {format(now, 'EEEE, d MMMM yyyy')}</div>
+        <div className="briefing-title">ELATZ Command Centre</div>
         <div className="briefing-subtitle">
-          {pendingToday.length === 0
-            ? '✅ All daily tasks done — great start!'
-            : `${pendingToday.length} task${pendingToday.length > 1 ? 's' : ''} pending today · ${doneToday.length} done`}
-          {overdue.length > 0 && <span style={{ color: 'var(--red)', marginLeft: '0.75rem' }}>⚠ {overdue.length} overdue</span>}
+          This month: <strong style={{ color: 'var(--green)' }}>₹{fmt(totalIncome)}</strong> in &nbsp;·&nbsp;
+          <strong style={{ color: 'var(--red)' }}>₹{fmt(totalExpense)}</strong> out &nbsp;·&nbsp;
+          <strong style={{ color: totalIncome - totalExpense >= 0 ? 'var(--green)' : 'var(--red)' }}>
+            ₹{fmt(Math.abs(totalIncome - totalExpense))} {totalIncome - totalExpense >= 0 ? 'net' : 'deficit'}
+          </strong>
         </div>
       </div>
 
-      {/* Business KPI Cards */}
+      {/* ── ROW 1: Business Income / Expense ── */}
       <section className="section">
-        <div className="section-title">Business Status</div>
-        <div className="briefing-kpis">
-          {bizTaskStats.map(b => (
-            <div key={b.id} className="kpi-card" onClick={() => setActiveTab('tasks')}>
-              <div className="kpi-biz" style={{ color: b.color }}>{b.emoji} {b.name}</div>
-              <div className="kpi-value">{b.pending}</div>
-              <div className="kpi-label">tasks pending · {b.done} done</div>
+        <div className="section-title"><TrendingUp size={14} /> Business Finances — {format(now, 'MMMM yyyy')}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '0.65rem' }}>
+          {bizFinance.map(b => (
+            <div key={b.id} style={{ background: 'var(--bg2)', border: `1px solid var(--border)`, borderTop: `3px solid ${b.color}`, borderRadius: 'var(--radius)', padding: '0.875rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.5rem' }}>
+                <span style={{ fontSize: '1rem' }}>{b.emoji}</span>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: b.color, lineHeight: 1.2 }}>{b.name}</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
+                  <span style={{ color: 'var(--text3)' }}>Income</span>
+                  <span style={{ color: 'var(--green)', fontFamily: 'Space Mono, monospace', fontWeight: 700 }}>₹{fmt(b.income)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
+                  <span style={{ color: 'var(--text3)' }}>Expense</span>
+                  <span style={{ color: 'var(--red)', fontFamily: 'Space Mono, monospace', fontWeight: 700 }}>₹{fmt(b.expense)}</span>
+                </div>
+                <div style={{ height: 1, background: 'var(--border)', margin: '0.25rem 0' }} />
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem' }}>
+                  <span style={{ color: 'var(--text2)', fontWeight: 600 }}>Net</span>
+                  <span style={{ color: b.net >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'Space Mono, monospace', fontWeight: 700 }}>₹{fmt(Math.abs(b.net))}</span>
+                </div>
+              </div>
             </div>
           ))}
+          {/* Total card */}
+          <div style={{ background: 'rgba(201,168,76,0.08)', border: '1px solid rgba(201,168,76,0.3)', borderTop: '3px solid var(--gold)', borderRadius: 'var(--radius)', padding: '0.875rem' }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--gold)', marginBottom: '0.5rem' }}>⚡ TOTAL</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
+                <span style={{ color: 'var(--text3)' }}>Income</span>
+                <span style={{ color: 'var(--green)', fontFamily: 'Space Mono, monospace', fontWeight: 700 }}>₹{fmt(totalIncome)}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
+                <span style={{ color: 'var(--text3)' }}>Expense</span>
+                <span style={{ color: 'var(--red)', fontFamily: 'Space Mono, monospace', fontWeight: 700 }}>₹{fmt(totalExpense)}</span>
+              </div>
+              <div style={{ height: 1, background: 'var(--border)', margin: '0.25rem 0' }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem' }}>
+                <span style={{ color: 'var(--text2)', fontWeight: 600 }}>Net</span>
+                <span style={{ color: totalIncome - totalExpense >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'Space Mono, monospace', fontWeight: 700 }}>₹{fmt(Math.abs(totalIncome - totalExpense))}</span>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
-      {/* Agent Tasks Summary */}
-      {agentTasks.length > 0 && (
-        <section className="section">
-          <div className="section-title"><Bot size={14} /> Agent Tasks</div>
-          {recentAgent.map(a => (
-            <div key={a.id} className="agent-task-card">
-              <div className="agent-header">
-                <span className="agent-icon">🤖</span>
-                <span className="agent-title">{a.title}</span>
-                <span className={`agent-status ${a.status}`}>{a.status}</span>
-              </div>
-              {a.result && <div className="agent-result">✓ {a.result}</div>}
-            </div>
-          ))}
-          {agentPending > 0 && (
-            <div style={{ fontSize: '0.8rem', color: 'var(--text3)' }}>+ {agentPending} agent task{agentPending > 1 ? 's' : ''} queued</div>
-          )}
-        </section>
-      )}
+      {/* ── ROW 2: Debts / Fixed / Unnecessary ── */}
+      <section className="section">
+        <div className="section-title"><CreditCard size={14} /> Financial Obligations</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.65rem' }}>
+          <div style={{ background: 'var(--bg2)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius)', padding: '1rem' }}>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.35rem' }}>Total Debt</div>
+            <div style={{ fontFamily: 'Space Mono, monospace', fontSize: '1.2rem', fontWeight: 700, color: 'var(--red)' }}>₹{fmt(totalDebt)}</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text3)', marginTop: '0.2rem' }}>EMI: ₹{fmt(monthlyEMI)}/mo</div>
+          </div>
+          <div style={{ background: 'var(--bg2)', border: '1px solid rgba(201,168,76,0.2)', borderRadius: 'var(--radius)', padding: '1rem' }}>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.35rem' }}>Fixed Monthly</div>
+            <div style={{ fontFamily: 'Space Mono, monospace', fontSize: '1.2rem', fontWeight: 700, color: 'var(--gold)' }}>₹{fmt(monthlyEMI + monthlySubs)}</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text3)', marginTop: '0.2rem' }}>EMI + Subscriptions</div>
+          </div>
+          <div style={{ background: 'var(--bg2)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 'var(--radius)', padding: '1rem' }}>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.35rem' }}>Unnecessary Spend</div>
+            <div style={{ fontFamily: 'Space Mono, monospace', fontSize: '1.2rem', fontWeight: 700, color: unnecessaryTotal > 0 ? 'var(--red)' : 'var(--green)' }}>₹{fmt(unnecessaryTotal)}</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text3)', marginTop: '0.2rem' }}>This month</div>
+          </div>
+          <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '1rem' }}>
+            <div style={{ fontSize: '0.68rem', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.35rem' }}>Subscriptions</div>
+            <div style={{ fontFamily: 'Space Mono, monospace', fontSize: '1.2rem', fontWeight: 700, color: 'var(--text)' }}>₹{fmt(monthlySubs)}</div>
+            <div style={{ fontSize: '0.72rem', color: 'var(--text3)', marginTop: '0.2rem' }}>{subscriptions.length} active</div>
+          </div>
+        </div>
+      </section>
 
-      {/* Today's Tasks */}
+      {/* ── ROW 3: Market Prices (WBE) ── */}
       <section className="section">
         <div className="section-title" style={{ justifyContent: 'space-between' }}>
-          <span>Today's Tasks</span>
-          <button className="btn-ghost" style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }} onClick={() => setActiveTab('tasks')}>View all →</button>
-        </div>
-        {todayTasks.length === 0 ? (
-          <div className="empty-card">No daily tasks set. Go to Tasks to add recurring tasks.</div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-            {todayTasks.slice(0, 8).map(t => (
-              <div key={t.id} className={`task-item status-${t.status}`} style={{ cursor: 'default' }}>
-                <span style={{ color: t.status === 'done' ? 'var(--green)' : 'var(--text3)' }}>
-                  {STATUS_ICON[t.status] || <Circle size={14} />}
-                </span>
-                <span className="task-title" style={{ flex: 1, fontSize: '0.85rem' }}>{t.title}</span>
-                <span style={{ fontSize: '0.65rem', color: 'var(--text3)' }}>
-                  {businesses.find(b => b.id === t.business_id)?.emoji}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* Monthly Financial Summary */}
-      <section className="section">
-        <div className="section-title"><TrendingUp size={14} /> {format(now, 'MMMM')} Finances</div>
-        <div className="summary-grid">
-          <div className="summary-card income-card">
-            <TrendingUp size={20} />
-            <div>
-              <div className="summary-label">Income</div>
-              <div className="summary-amount">₹{totalIncome.toLocaleString('en-IN')}</div>
-            </div>
-          </div>
-          <div className="summary-card expense-card">
-            <TrendingDown size={20} />
-            <div>
-              <div className="summary-label">Expenses</div>
-              <div className="summary-amount">₹{totalExpense.toLocaleString('en-IN')}</div>
-            </div>
-          </div>
-          <div className={`summary-card ${netAmount >= 0 ? 'profit-card' : 'loss-card'}`}>
-            <AlertCircle size={20} />
-            <div>
-              <div className="summary-label">{netAmount >= 0 ? 'In-Hand' : 'Deficit'}</div>
-              <div className="summary-amount">₹{Math.abs(netAmount).toLocaleString('en-IN')}</div>
-            </div>
-          </div>
-          <div className="summary-card subs-card">
-            <Zap size={20} />
-            <div>
-              <div className="summary-label">Subscriptions</div>
-              <div className="summary-amount">₹{monthlySubscriptions.toLocaleString('en-IN')}</div>
-            </div>
-          </div>
-        </div>
-        {totalDebt > 0 && (
-          <div style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '0.75rem 1rem', fontSize: '0.82rem', color: 'var(--text2)', display: 'flex', justifyContent: 'space-between' }}>
-            <span>Total Debt: <strong style={{ color: 'var(--red)' }}>₹{totalDebt.toLocaleString('en-IN')}</strong></span>
-            <span>EMI/mo: <strong style={{ color: 'var(--amber)' }}>₹{monthlyEMI.toLocaleString('en-IN')}</strong></span>
-          </div>
-        )}
-      </section>
-
-      {/* AI Spend Analysis */}
-      <section className="section">
-        <div className="section-title">
-          <AlertCircle size={14} /> Spending Watch
-          <button className="ai-analyze-btn" onClick={runAIAnalysis} disabled={analyzing}>
-            {analyzing ? '⏳ Analyzing...' : '🤖 AI Analyze'}
+          <span>🌿 Market Prices — WBE Products</span>
+          <button className="btn-ghost" style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }} onClick={refreshPrices}>
+            <RefreshCw size={12} className={refreshing ? 'spinning' : ''} /> Refresh
           </button>
         </div>
-        {unnecessaryTotal > 0 && (
-          <div style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 'var(--radius-sm)', padding: '0.75rem 1rem', fontSize: '0.85rem' }}>
-            Detected unnecessary spend: <strong style={{ color: 'var(--red)' }}>₹{unnecessaryTotal.toLocaleString('en-IN')}</strong>
-            {totalExpense > 0 && <span style={{ color: 'var(--text3)' }}> ({Math.round((unnecessaryTotal / totalExpense) * 100)}% of expenses)</span>}
+        {latestPrices.length === 0 ? (
+          <div className="empty-card">
+            Market prices will appear here daily at 10 AM once the agent scheduler is deployed.
+            <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--text3)' }}>Products tracked: Black Pepper • Green Cardamom • Coconut • Moringa • Lemon</div>
           </div>
-        )}
-        {aiAnalysis && (
-          <div className="ai-analysis-card">
-            <div className="ai-badge">🤖 AI Analysis</div>
-            {aiAnalysis.pattern && <p className="ai-pattern">📊 {aiAnalysis.pattern}</p>}
-            {aiAnalysis.savings_tip && <p className="ai-tip">💡 {aiAnalysis.savings_tip}</p>}
-            {aiAnalysis.total_unnecessary > 0 && (
-              <div className="ai-total">AI flagged: ₹{Number(aiAnalysis.total_unnecessary).toLocaleString('en-IN')}</div>
-            )}
-          </div>
-        )}
-        {unnecessaryTotal === 0 && !aiAnalysis && (
-          <div className="empty-card">No obvious unnecessary spends this month. Run AI analysis for deeper insights.</div>
-        )}
-      </section>
-
-      {/* Business Notes Peek */}
-      {notes.length > 0 && (
-        <section className="section">
-          <div className="section-title" style={{ justifyContent: 'space-between' }}>
-            <span>📝 Business Status Notes</span>
-            <button className="btn-ghost" style={{ fontSize: '0.75rem', padding: '0.25rem 0.6rem' }} onClick={() => setActiveTab('notes')}>Edit →</button>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            {notes.slice(0, 3).map(n => (
-              <div key={n.id} style={{ background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '0.75rem 1rem' }}>
-                <div style={{ fontSize: '0.72rem', fontWeight: 600, color: n.biz_color || 'var(--accent2)', marginBottom: '0.25rem', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-                  {n.biz_emoji} {n.biz_name}
-                </div>
-                <div style={{ fontSize: '0.83rem', color: 'var(--text2)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{n.content.slice(0, 120)}{n.content.length > 120 ? '...' : ''}</div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.6rem' }}>
+            {latestPrices.map(p => (
+              <div key={p.id} style={{ background: 'var(--bg2)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 'var(--radius)', padding: '0.875rem' }}>
+                <div style={{ fontSize: '0.7rem', color: 'var(--green)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.3rem' }}>{p.product}</div>
+                <div style={{ fontFamily: 'Space Mono, monospace', fontSize: '1.1rem', fontWeight: 700 }}>₹{fmt(p.price_per_kg)}/kg</div>
+                {p.change_pct && (
+                  <div style={{ fontSize: '0.7rem', color: p.change_pct > 0 ? 'var(--green)' : 'var(--red)', marginTop: '0.2rem' }}>
+                    {p.change_pct > 0 ? '▲' : '▼'} {Math.abs(p.change_pct)}%
+                  </div>
+                )}
+                <div style={{ fontSize: '0.65rem', color: 'var(--text3)', marginTop: '0.2rem' }}>{p.source} · {p.fetched_at ? format(parseISO(p.fetched_at), 'd MMM, h:mm a') : '—'}</div>
               </div>
             ))}
           </div>
-        </section>
-      )}
+        )}
+      </section>
+
+      {/* ── ROW 4: Wear It Stats ── */}
+      <section className="section">
+        <div className="section-title"><ShoppingCart size={14} /> Elatz Wear It — {format(now, 'MMMM')} Overview</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.65rem' }}>
+          {[
+            { label: 'Orders', value: wearItOrders, color: 'var(--blue)', suffix: '' },
+            { label: 'Revenue', value: `₹${fmt(wearItIncome)}`, color: 'var(--green)', suffix: '' },
+            { label: 'Expenses', value: `₹${fmt(wearItExpense)}`, color: 'var(--red)', suffix: '' },
+            { label: 'Profit', value: `₹${fmt(Math.abs(wearItIncome - wearItExpense))}`, color: wearItIncome - wearItExpense >= 0 ? 'var(--green)' : 'var(--red)', suffix: '' },
+          ].map(card => (
+            <div key={card.label} style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '0.875rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '0.65rem', color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: '0.35rem' }}>{card.label}</div>
+              <div style={{ fontFamily: 'Space Mono, monospace', fontSize: '0.95rem', fontWeight: 700, color: card.color }}>{card.value}</div>
+            </div>
+          ))}
+        </div>
+        {!wearIt && <div style={{ fontSize: '0.75rem', color: 'var(--text3)' }}>Shopify integration coming in Phase 3 — will auto-pull live orders.</div>}
+      </section>
+
+      {/* ── ROW 5: All Businesses Priority Tasks ── */}
+      <section className="section">
+        <div className="section-title">🔥 Priority Tasks by Business</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.75rem' }}>
+          {bizTasks.map(b => (
+            <div key={b.id} style={{ background: 'var(--bg2)', border: `1px solid var(--border)`, borderTop: `3px solid ${b.color}`, borderRadius: 'var(--radius)', padding: '0.875rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.6rem' }}>
+                <span style={{ fontSize: '1rem' }}>{b.emoji}</span>
+                <span style={{ fontWeight: 700, fontSize: '0.82rem', color: b.color }}>{b.name}</span>
+                <span style={{ marginLeft: 'auto', fontSize: '0.65rem', color: 'var(--text3)', background: 'var(--bg3)', padding: '0.1rem 0.4rem', borderRadius: 20 }}>
+                  {tasks.filter(t => t.business_id === b.id && t.status !== 'done').length} pending
+                </span>
+              </div>
+              {b.urgentHigh.length === 0 ? (
+                <div style={{ fontSize: '0.78rem', color: 'var(--text3)' }}>✅ No urgent/high tasks</div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                  {b.urgentHigh.map(t => (
+                    <div key={t.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontSize: '0.8rem' }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: PRIORITY_COLOR[t.priority], flexShrink: 0, marginTop: 5 }} />
+                      <span style={{ color: 'var(--text2)', lineHeight: 1.4 }}>{t.title}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
     </div>
   )
 }

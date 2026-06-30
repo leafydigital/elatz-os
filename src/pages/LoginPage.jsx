@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useApp } from '../context/AppContext'
+import elatzLogo from '../assets/elatz-logo.png'
 
 export default function LoginPage() {
   const { loginWithGoogle, authError, authLoading } = useApp()
@@ -22,9 +23,7 @@ export default function LoginPage() {
   return (
     <div className="login-screen">
       <div className="login-card">
-        <div className="login-logo">
-          <span className="logo-e">E</span><span className="logo-z">Z</span>
-        </div>
+        <img src={elatzLogo} alt="ELATZ" style={{ width: 64, height: 64, borderRadius: 12, objectFit: 'cover', margin: '0 auto 0.5rem' }} />
         <div className="login-brand">ELATZ OS</div>
         <div className="login-sub">Command centre for all your businesses</div>
 

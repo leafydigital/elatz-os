@@ -32,12 +32,7 @@ export const INCOME_CATEGORIES = [
   'Investment Return', 'Other Income'
 ]
 
-export const BIZ_CONFIG = {
-  wbe:    { label: 'Wander Breeze Exim', emoji: '🌿', color: '#10b981', key: 'wbe' },
-  driveX: { label: 'DriveX RC Garage',   emoji: '🚛', color: '#f5c842', key: 'driveX' },
-  wearit: { label: 'Wear It',             emoji: '👕', color: '#8b5cf6', key: 'wearit' },
-  elatz:  { label: 'ELATZ Groups',        emoji: '⚡', color: '#7c3aed', key: 'elatz' },
-}
+export const BANK_ACCOUNTS = ['ICICI', 'HDFC', 'Cash', 'UPI', 'Other']
 
 export function AppProvider({ children }) {
   const [user, setUser] = useState(null)
@@ -51,6 +46,10 @@ export function AppProvider({ children }) {
   const [notes, setNotes] = useState([])
   const [agentTasks, setAgentTasks] = useState([])
   const [contacts, setContacts] = useState([])
+  const [marketPrices, setMarketPrices] = useState([])
+  const [products, setProducts] = useState([])
+  const [invoices, setInvoices] = useState([])
+  const [settings, setSettings] = useState({})
   const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('dashboard')
 
@@ -85,9 +84,19 @@ export function AppProvider({ children }) {
     await Promise.all([
       loadBusinesses(), loadTasks(), loadTransactions(),
       loadDebts(), loadSubscriptions(), loadNotes(),
-      loadAgentTasks(), loadContacts()
+      loadAgentTasks(), loadContacts(), loadMarketPrices(),
+      loadProducts(), loadInvoices(), loadSettings()
     ])
     setLoading(false)
+  }
+
+  async function loadSettings() {
+    const { data } = await supabase.from('os_settings').select('*')
+    if (data) setSettings(Object.fromEntries(data.map(r => [r.key, r.value])))
+  }
+  async function saveSetting(key, value) {
+    await supabase.from('os_settings').upsert({ key, value, updated_at: new Date().toISOString() })
+    setSettings(p => ({ ...p, [key]: value }))
   }
 
   async function loadBusinesses() {
@@ -95,11 +104,13 @@ export function AppProvider({ children }) {
     if (data) setBusinesses(data)
   }
   async function loadTasks() {
-    const { data } = await supabase.from('tasks').select('*').order('priority', { ascending: false })
+    const { data } = await supabase.from('tasks').select('*').order('created_at', { ascending: false })
     if (data) setTasks(data)
   }
   async function loadTransactions() {
-    const { data } = await supabase.from('transactions').select('*, businesses(name, emoji, color)').order('transaction_date', { ascending: false }).limit(500)
+    const { data } = await supabase.from('transactions')
+      .select('*, businesses(name, emoji, color)')
+      .order('transaction_date', { ascending: false }).limit(500)
     if (data) setTransactions(data)
   }
   async function loadDebts() {
@@ -122,6 +133,18 @@ export function AppProvider({ children }) {
     const { data } = await supabase.from('os_contacts').select('*').order('created_at', { ascending: false }).limit(200)
     if (data) setContacts(data)
   }
+  async function loadMarketPrices() {
+    const { data } = await supabase.from('os_market_prices').select('*').order('fetched_at', { ascending: false }).limit(50)
+    if (data) setMarketPrices(data)
+  }
+  async function loadProducts() {
+    const { data } = await supabase.from('os_products').select('*, businesses(name, color)').order('created_at', { ascending: false })
+    if (data) setProducts(data)
+  }
+  async function loadInvoices() {
+    const { data } = await supabase.from('os_invoices').select('*, businesses(name, color)').order('invoice_date', { ascending: false }).limit(200)
+    if (data) setInvoices(data)
+  }
 
   async function loginWithGoogle() {
     setAuthError(null)
@@ -137,7 +160,8 @@ export function AppProvider({ children }) {
     setUser(null)
     setBusinesses([]); setTasks([]); setTransactions([])
     setDebts([]); setSubscriptions([]); setNotes([])
-    setAgentTasks([]); setContacts([])
+    setAgentTasks([]); setContacts([]); setMarketPrices([])
+    setProducts([]); setInvoices([])
   }
 
   return (
@@ -152,6 +176,10 @@ export function AppProvider({ children }) {
       notes, setNotes, loadNotes,
       agentTasks, setAgentTasks, loadAgentTasks,
       contacts, setContacts, loadContacts,
+      marketPrices, setMarketPrices, loadMarketPrices,
+      products, setProducts, loadProducts,
+      invoices, setInvoices, loadInvoices,
+      settings, loadSettings, saveSetting,
       loading, activeTab, setActiveTab, loadAll
     }}>
       {children}

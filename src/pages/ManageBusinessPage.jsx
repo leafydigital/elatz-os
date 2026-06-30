@@ -15,23 +15,9 @@ const BUSINESS_PRESETS = [
   {
     name: 'Elatz Wear It',
     emoji: '👕',
-    color: '#ef4444',
-    accent: '#ef4444',
-    desc: 'T-shirts & corporate gifting',
-  },
-  {
-    name: '#WBE Fruits & Vegetables',
-    emoji: '🥭',
-    color: '#10b981',
-    accent: '#eab308',
-    desc: 'Fresh produce wholesale',
-  },
-  {
-    name: 'DriveX RC Garage',
-    emoji: '🚛',
-    color: '#f5c842',
-    accent: '#f5c842',
-    desc: 'RC hobby & e-commerce',
+    color: '#8b5cf6',
+    accent: '#8b5cf6',
+    desc: 'Apparel & Shopify store',
   },
   {
     name: 'Leafy Digital',
@@ -41,11 +27,32 @@ const BUSINESS_PRESETS = [
     desc: 'Digital marketing & software',
   },
   {
-    name: '3D Dropshipping',
+    name: '#WBE Fresh Produce',
+    emoji: '🥭',
+    color: '#10b981',
+    accent: '#eab308',
+    desc: 'Fresh produce wholesale',
+  },
+  {
+    name: 'DriveX RC Garage',
+    emoji: '🏎️',
+    color: '#f5c842',
+    accent: '#f5c842',
+    desc: 'RC hobby & e-commerce',
+  },
+  {
+    name: 'IBA Home Decor',
     emoji: '🖨️',
-    color: '#f97316',
-    accent: '#f97316',
-    desc: '3D print dropship store',
+    color: '#06b6d4',
+    accent: '#06b6d4',
+    desc: '3D printed products e-commerce',
+  },
+  {
+    name: 'The Wedding Threads',
+    emoji: '💍',
+    color: '#ec4899',
+    accent: '#ec4899',
+    desc: 'Wedding & event apparel',
   },
 ]
 
@@ -329,6 +336,51 @@ function AddBusinessModal({ onClose, onDone }) {
   )
 }
 
+function TelegramSettings() {
+  const { settings, saveSetting } = useApp()
+  const [chatId, setChatId] = useState(settings.telegram_chat_id || '')
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testMsg, setTestMsg] = useState('')
+
+  async function save() {
+    setSaving(true)
+    await saveSetting('telegram_chat_id', chatId.trim())
+    setSaving(false); setSaved(true)
+    setTimeout(() => setSaved(false), 1500)
+  }
+
+  async function sendTest() {
+    setTesting(true); setTestMsg('')
+    try {
+      const { data, error } = await supabase.functions.invoke('telegram-notify', { body: { test: true } })
+      if (error) throw error
+      setTestMsg(data?.message || 'Sent! Check your Telegram.')
+    } catch (e) {
+      setTestMsg('Could not reach the telegram-notify function. Deploy it first (see README).')
+    }
+    setTesting(false)
+  }
+
+  return (
+    <div style={{ background: 'var(--bg2)', border: '1px solid rgba(6,182,212,0.2)', borderRadius: 'var(--radius)', padding: '1rem' }}>
+      <div style={{ fontSize: '0.72rem', fontFamily: 'Space Mono, monospace', color: '#06b6d4', letterSpacing: '0.1em', marginBottom: '0.5rem', textTransform: 'uppercase' }}>🔔 Telegram Task Reminders</div>
+      <p style={{ fontSize: '0.8rem', color: 'var(--text3)', lineHeight: 1.5, marginBottom: '0.75rem' }}>
+        Get nudged on Telegram for any task you mark "🔔 Remind me" — repeats until you mark it done.
+        1) Message <code style={{ background: 'var(--bg3)', padding: '0.1rem 0.3rem', borderRadius: 4 }}>@BotFather</code> on Telegram → <code style={{ background: 'var(--bg3)', padding: '0.1rem 0.3rem', borderRadius: 4 }}>/newbot</code> → copy the bot token into your Supabase Edge Function secret <code style={{ background: 'var(--bg3)', padding: '0.1rem 0.3rem', borderRadius: 4 }}>TELEGRAM_BOT_TOKEN</code>.
+        2) Message your new bot once, then open <code style={{ background: 'var(--bg3)', padding: '0.1rem 0.3rem', borderRadius: 4 }}>https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</code> to find your numeric chat id and paste it below.
+      </p>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <input className="form-input" style={{ maxWidth: 240, margin: 0 }} placeholder="Your Telegram chat ID" value={chatId} onChange={e => setChatId(e.target.value)} />
+        <button className="btn-primary" onClick={save} disabled={saving}>{saved ? '✓ Saved' : saving ? 'Saving...' : 'Save'}</button>
+        <button className="btn-ghost" onClick={sendTest} disabled={testing}>{testing ? 'Sending...' : 'Send test message'}</button>
+      </div>
+      {testMsg && <p style={{ fontSize: '0.78rem', color: 'var(--text3)', marginTop: '0.5rem' }}>{testMsg}</p>}
+    </div>
+  )
+}
+
 export default function ManageBusinessPage() {
   const { businesses, loadBusinesses } = useApp()
   const [showAdd, setShowAdd] = useState(false)
@@ -352,6 +404,8 @@ export default function ManageBusinessPage() {
           ))}
         </div>
       )}
+
+      <TelegramSettings />
 
       <div style={{ background: 'var(--bg2)', border: '1px solid rgba(201,168,76,0.15)', borderRadius: 'var(--radius)', padding: '1rem' }}>
         <div style={{ fontSize: '0.72rem', fontFamily: 'Space Mono, monospace', color: 'var(--gold)', letterSpacing: '0.1em', marginBottom: '0.5rem', textTransform: 'uppercase' }}>💡 Icon Upload Note</div>

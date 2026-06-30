@@ -25,10 +25,22 @@ create table tasks (
   description text,
   status text default 'pending' check (status in ('pending','in_progress','done','deferred')),
   priority text default 'medium' check (priority in ('low','medium','high','urgent')),
+  task_type text default 'priority' check (task_type in ('order','priority','idea')),
+  sort_order integer default 0,
   is_recurring boolean default false,
   recur_daily boolean default false,
   due_date date,
+  telegram_remind boolean default false,
+  last_reminded_at timestamptz,
+  completed_at timestamptz,
   created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+-- Settings (key/value) — Telegram chat id etc.
+create table os_settings (
+  key text primary key,
+  value text,
   updated_at timestamptz default now()
 );
 
@@ -78,14 +90,16 @@ create table subscriptions (
 -- Seed: Businesses
 insert into businesses (name, emoji, color) values
   ('Wander Breeze Exim', '🌿', '#10b981'),
-  ('WBE Fresh Fruits & Veg', '🥭', '#f59e0b'),
-  ('T-Shirt & Corporate Gifting', '👕', '#8b5cf6'),
-  ('3D Print Dropshipping', '🖨️', '#ef4444'),
-  ('Leafy Digital', '💻', '#3b82f6');
+  ('Elatz Wear It', '👕', '#8b5cf6'),
+  ('Leafy Digital', '💻', '#3b82f6'),
+  ('#WBE Fresh Produce', '🥭', '#f59e0b'),
+  ('DriveX RC Garage', '🏎️', '#ef4444'),
+  ('IBA Home Decor', '🖨️', '#06b6d4'),
+  ('The Wedding Threads', '💍', '#ec4899');
 
 -- Seed: Tasks for Wander Breeze Exim
-insert into tasks (business_id, title, priority, is_recurring, recur_daily)
-select id, t.title, t.priority::text, true, true
+insert into tasks (business_id, title, priority, task_type, is_recurring, recur_daily)
+select id, t.title, t.priority::text, 'priority', true, true
 from businesses, (values
   ('Importer finding and outreach', 'high'),
   ('Buyer follow-up emails', 'high'),
@@ -93,30 +107,29 @@ from businesses, (values
 ) as t(title, priority)
 where name = 'Wander Breeze Exim';
 
--- Seed: Tasks for WBE Fresh Fruits & Veg
-insert into tasks (business_id, title, priority, is_recurring, recur_daily)
-select id, t.title, t.priority::text, true, true
+-- Seed: Tasks for #WBE Fresh Produce
+insert into tasks (business_id, title, priority, task_type, is_recurring, recur_daily)
+select id, t.title, t.priority::text, 'priority', true, true
 from businesses, (values
   ('Supplier finding', 'high'),
   ('Product research', 'medium'),
   ('Marketing strategy', 'medium')
 ) as t(title, priority)
-where name = 'WBE Fresh Fruits & Veg';
+where name = '#WBE Fresh Produce';
 
--- Seed: Tasks for T-Shirt & Corporate Gifting
-insert into tasks (business_id, title, priority, is_recurring, recur_daily)
-select id, t.title, t.priority::text, true, false
+-- Seed: Tasks for Elatz Wear It
+insert into tasks (business_id, title, priority, task_type, is_recurring, recur_daily)
+select id, t.title, t.priority::text, 'priority', true, false
 from businesses, (values
-  ('T-shirt design creation', 'high'),
+  ('Onam design creation', 'urgent'),
   ('Mockup generation', 'medium'),
-  ('Corporate gifting research', 'medium'),
-  ('Launching plan', 'high')
+  ('Launch plan for Onam collection', 'high')
 ) as t(title, priority)
-where name = 'T-Shirt & Corporate Gifting';
+where name = 'Elatz Wear It';
 
--- Seed: Tasks for 3D Print Dropshipping
-insert into tasks (business_id, title, priority, is_recurring, recur_daily)
-select id, t.title, t.priority::text, true, false
+-- Seed: Tasks for IBA Home Decor
+insert into tasks (business_id, title, priority, task_type, is_recurring, recur_daily)
+select id, t.title, t.priority::text, 'priority', true, false
 from businesses, (values
   ('Product niche research', 'high'),
   ('3D model design', 'high'),
@@ -124,11 +137,11 @@ from businesses, (values
   ('Website development', 'medium'),
   ('Marketing research', 'medium')
 ) as t(title, priority)
-where name = '3D Print Dropshipping';
+where name = 'IBA Home Decor';
 
 -- Seed: Tasks for Leafy Digital
-insert into tasks (business_id, title, priority, is_recurring, recur_daily)
-select id, t.title, t.priority::text, true, true
+insert into tasks (business_id, title, priority, task_type, is_recurring, recur_daily)
+select id, t.title, t.priority::text, 'priority', true, true
 from businesses, (values
   ('Lead generation', 'high'),
   ('Client outreach', 'high'),
@@ -154,9 +167,11 @@ alter table tasks enable row level security;
 alter table transactions enable row level security;
 alter table debts enable row level security;
 alter table subscriptions enable row level security;
+alter table os_settings enable row level security;
 
 create policy "Allow all" on businesses for all using (true) with check (true);
 create policy "Allow all" on tasks for all using (true) with check (true);
 create policy "Allow all" on transactions for all using (true) with check (true);
 create policy "Allow all" on debts for all using (true) with check (true);
 create policy "Allow all" on subscriptions for all using (true) with check (true);
+create policy "Allow all" on os_settings for all using (true) with check (true);

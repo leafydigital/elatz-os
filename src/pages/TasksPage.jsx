@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useApp } from '../context/AppContext'
 import { supabase } from '../lib/supabase'
-import { Plus, CheckCircle2, Circle, Clock, AlertTriangle, ChevronDown, ChevronUp, Trash2, Edit2, X, Zap, Bot, ArrowRight } from 'lucide-react'
+import { Plus, CheckCircle2, Circle, Clock, AlertTriangle, ChevronDown, ChevronUp, Trash2, Edit2, X, Zap, Bot, ArrowRight, ArrowUp, ArrowDown, Bell, BellOff } from 'lucide-react'
 
 const PRIORITY_CONFIG = {
   urgent: { label: 'Urgent', color: '#ef4444' },
@@ -14,6 +14,11 @@ const STATUS_CONFIG = {
   in_progress: { label: 'In Progress', icon: <Clock size={16} /> },
   done:        { label: 'Done',        icon: <CheckCircle2 size={16} /> },
   deferred:    { label: 'Deferred',    icon: '⏸️' },
+}
+const TYPE_CONFIG = {
+  order:    { label: 'Order',    emoji: '🔢', color: '#06b6d4' },
+  priority: { label: 'Priority', emoji: '🔥', color: '#f59e0b' },
+  idea:     { label: 'Idea',     emoji: '💡', color: '#a78bfa' },
 }
 const PRIORITY_OPTS = [
   { value: 'high', label: 'High', color: '#f59e0b', bg: 'rgba(245,158,11,0.15)' },
@@ -38,7 +43,7 @@ function BulkAddModal({ businesses, onClose, onDone }) {
     if (!selectedBiz) { setErr('Select a business first.'); return }
     setErr(''); setSaving(true)
     const inserts = rows.filter(r => r.title.trim()).map(r => ({
-      business_id: selectedBiz.id, title: r.title.trim(), priority: r.priority,
+      business_id: selectedBiz.id, title: r.title.trim(), priority: r.priority, task_type: 'priority',
       due_date: r.due_date || null, recur_daily: r.recur_daily, is_recurring: r.recur_daily, status: 'pending',
     }))
     const { error: dbErr } = await supabase.from('tasks').insert(inserts)
@@ -160,24 +165,46 @@ export default function TasksPage() {
   const [showAddBiz, setShowAddBiz] = useState(false)
   const [showBulkAdd, setShowBulkAdd] = useState(false)
   const [showAgentAdd, setShowAgentAdd] = useState(false)
-  const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'medium', status: 'pending', is_recurring: false, recur_daily: false, due_date: '' })
+  const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'medium', task_type: 'priority', status: 'pending', is_recurring: false, recur_daily: false, due_date: '', telegram_remind: false })
   const [newBiz, setNewBiz] = useState({ name: '', emoji: '🏢', color: '#6366f1' })
   const [editTask, setEditTask] = useState(null)
   const [activeView, setActiveView] = useState('tasks') // tasks | agents
 
   const tasksByBusiness = businesses.map(b => ({
-    business: b, tasks: tasks.filter(t => t.business_id === b.id)
+    business: b,
+    tasks: tasks.filter(t => t.business_id === b.id)
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
   }))
 
   async function addTask(businessId) {
     if (!newTask.title.trim()) return
-    await supabase.from('tasks').insert({ ...newTask, business_id: businessId, due_date: newTask.due_date || null })
-    setNewTask({ title: '', description: '', priority: 'medium', status: 'pending', is_recurring: false, recur_daily: false, due_date: '' })
+    const maxOrder = Math.max(0, ...tasks.filter(t => t.business_id === businessId).map(t => t.sort_order || 0))
+    await supabase.from('tasks').insert({ ...newTask, business_id: businessId, due_date: newTask.due_date || null, sort_order: maxOrder + 1 })
+    setNewTask({ title: '', description: '', priority: 'medium', task_type: 'priority', status: 'pending', is_recurring: false, recur_daily: false, due_date: '', telegram_remind: false })
     setShowAddTask(null); loadTasks()
   }
 
   async function updateTaskStatus(taskId, status) {
-    await supabase.from('tasks').update({ status, updated_at: new Date().toISOString() }).eq('id', taskId)
+    const patch = { status, updated_at: new Date().toISOString() }
+    patch.completed_at = status === 'done' ? new Date().toISOString() : null
+    await supabase.from('tasks').update(patch).eq('id', taskId)
+    loadTasks()
+  }
+
+  async function toggleRemind(task) {
+    await supabase.from('tasks').update({ telegram_remind: !task.telegram_remind }).eq('id', task.id)
+    loadTasks()
+  }
+
+  async function moveTask(bizTasks, taskId, dir) {
+    const idx = bizTasks.findIndex(t => t.id === taskId)
+    const swapIdx = idx + dir
+    if (idx < 0 || swapIdx < 0 || swapIdx >= bizTasks.length) return
+    const a = bizTasks[idx], b = bizTasks[swapIdx]
+    await Promise.all([
+      supabase.from('tasks').update({ sort_order: b.sort_order ?? swapIdx }).eq('id', a.id),
+      supabase.from('tasks').update({ sort_order: a.sort_order ?? idx }).eq('id', b.id),
+    ])
     loadTasks()
   }
 
@@ -194,7 +221,13 @@ export default function TasksPage() {
 
   async function saveEditTask() {
     if (!editTask) return
-    await supabase.from('tasks').update({ title: editTask.title, description: editTask.description, priority: editTask.priority, status: editTask.status, is_recurring: editTask.is_recurring, recur_daily: editTask.recur_daily, due_date: editTask.due_date || null, updated_at: new Date().toISOString() }).eq('id', editTask.id)
+    await supabase.from('tasks').update({
+      title: editTask.title, description: editTask.description, priority: editTask.priority,
+      task_type: editTask.task_type, status: editTask.status, is_recurring: editTask.is_recurring,
+      recur_daily: editTask.recur_daily, due_date: editTask.due_date || null,
+      completed_at: editTask.status === 'done' ? (editTask.completed_at || new Date().toISOString()) : null,
+      updated_at: new Date().toISOString()
+    }).eq('id', editTask.id)
     setEditTask(null); loadTasks()
   }
 
@@ -245,8 +278,12 @@ export default function TasksPage() {
                 {isOpen && (
                   <div className="task-list">
                     {bTasks.length === 0 && <div className="no-tasks">No tasks. Click + to add.</div>}
-                    {bTasks.map(task => (
+                    {bTasks.map((task, i) => (
                       <div key={task.id} className={`task-item status-${task.status}${task.is_agent_task ? ' is-agent' : ''}`}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <button className="icon-btn" style={{ padding: 0 }} disabled={i === 0} onClick={() => moveTask(bTasks, task.id, -1)}><ArrowUp size={12} /></button>
+                          <button className="icon-btn" style={{ padding: 0 }} disabled={i === bTasks.length - 1} onClick={() => moveTask(bTasks, task.id, 1)}><ArrowDown size={12} /></button>
+                        </div>
                         <button className="task-status-btn" onClick={() => {
                           const next = task.status === 'pending' ? 'in_progress' : task.status === 'in_progress' ? 'done' : 'pending'
                           updateTaskStatus(task.id, next)
@@ -255,13 +292,20 @@ export default function TasksPage() {
                           <div className="task-title">{task.title}</div>
                           {task.description && <div className="task-desc">{task.description}</div>}
                           <div className="task-meta">
+                            <span className="priority-badge" style={{ background: (TYPE_CONFIG[task.task_type] || TYPE_CONFIG.priority).color + '22', color: (TYPE_CONFIG[task.task_type] || TYPE_CONFIG.priority).color }}>{(TYPE_CONFIG[task.task_type] || TYPE_CONFIG.priority).emoji} {(TYPE_CONFIG[task.task_type] || TYPE_CONFIG.priority).label}</span>
                             <span className="priority-badge" style={{ background: PRIORITY_CONFIG[task.priority]?.color + '22', color: PRIORITY_CONFIG[task.priority]?.color }}>{PRIORITY_CONFIG[task.priority]?.label}</span>
                             {task.recur_daily && <span className="recur-badge">🔁 Daily</span>}
                             {task.due_date && <span className="due-badge">📅 {task.due_date}</span>}
                             {task.is_agent_task && <span className="agent-badge">🤖 Agent</span>}
+                            {task.status === 'done' && task.completed_at && (
+                              <span className="due-badge" style={{ color: 'var(--green)' }}>✓ {new Date(task.completed_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                            )}
                           </div>
                         </div>
                         <div className="task-actions">
+                          <button className="icon-btn" title={task.telegram_remind ? 'Reminders ON — click to stop' : 'Remind me on Telegram'} style={{ color: task.telegram_remind ? '#06b6d4' : undefined }} onClick={() => toggleRemind(task)}>
+                            {task.telegram_remind ? <Bell size={13} /> : <BellOff size={13} />}
+                          </button>
                           <button className="icon-btn" onClick={() => setEditTask(task)}><Edit2 size={13} /></button>
                           <button className="icon-btn danger" onClick={() => deleteTask(task.id)}><Trash2 size={13} /></button>
                         </div>
@@ -275,11 +319,15 @@ export default function TasksPage() {
                           <select className="form-select" value={newTask.priority} onChange={e => setNewTask(p => ({ ...p, priority: e.target.value }))}>
                             {Object.entries(PRIORITY_CONFIG).map(([v, c]) => <option key={v} value={v}>{c.label}</option>)}
                           </select>
+                          <select className="form-select" value={newTask.task_type} onChange={e => setNewTask(p => ({ ...p, task_type: e.target.value }))}>
+                            {Object.entries(TYPE_CONFIG).map(([v, c]) => <option key={v} value={v}>{c.emoji} {c.label}</option>)}
+                          </select>
                           <input type="date" className="form-input" value={newTask.due_date} onChange={e => setNewTask(p => ({ ...p, due_date: e.target.value }))} />
                         </div>
                         <div className="form-check-row">
                           <label><input type="checkbox" checked={newTask.is_recurring} onChange={e => setNewTask(p => ({ ...p, is_recurring: e.target.checked }))} /> Recurring</label>
                           <label><input type="checkbox" checked={newTask.recur_daily} onChange={e => setNewTask(p => ({ ...p, recur_daily: e.target.checked }))} /> Daily</label>
+                          <label><input type="checkbox" checked={newTask.telegram_remind} onChange={e => setNewTask(p => ({ ...p, telegram_remind: e.target.checked }))} /> 🔔 Telegram remind me</label>
                         </div>
                         <div className="form-actions">
                           <button className="btn-primary" onClick={() => addTask(business.id)}>Add Task</button>
@@ -363,6 +411,9 @@ export default function TasksPage() {
             <div className="form-row">
               <select className="form-select" value={editTask.priority} onChange={e => setEditTask(p => ({ ...p, priority: e.target.value }))}>
                 {Object.entries(PRIORITY_CONFIG).map(([v, c]) => <option key={v} value={v}>{c.label}</option>)}
+              </select>
+              <select className="form-select" value={editTask.task_type || 'priority'} onChange={e => setEditTask(p => ({ ...p, task_type: e.target.value }))}>
+                {Object.entries(TYPE_CONFIG).map(([v, c]) => <option key={v} value={v}>{c.emoji} {c.label}</option>)}
               </select>
               <select className="form-select" value={editTask.status} onChange={e => setEditTask(p => ({ ...p, status: e.target.value }))}>
                 {Object.entries(STATUS_CONFIG).map(([v, c]) => <option key={v} value={v}>{c.label}</option>)}
